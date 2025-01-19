@@ -8,6 +8,8 @@ from telethon.errors import (
 import asyncio
 import nest_asyncio
 from telethon.sync import TelegramClient as SyncTelegramClient
+import os
+from aiohttp import web
 
 # Apply nest_asyncio
 nest_asyncio.apply()
@@ -202,8 +204,27 @@ async def start_forwarding():
     except Exception as e:
         print(f"Error starting forwarder: {str(e)}")
 
+# Add this new function for the web server
+async def web_server():
+    app = web.Application()
+    
+    async def handle(request):
+        return web.Response(text="Bot is running!")
+    
+    app.router.add_get('/', handle)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get('PORT', 8000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Web server started on port {port}")
+
 async def main():
     try:
+        # Start web server
+        await web_server()
+        
         await bot.start(bot_token=BOT_TOKEN)
         await client.connect()
         
@@ -216,7 +237,7 @@ async def main():
             print("Waiting for authentication through bot...")
             print("Please start the bot and complete authentication.")
         
-        # Run both bot and forwarding
+        # Run the bot forever
         await bot.run_until_disconnected()
     except Exception as e:
         print(f"Main loop error: {str(e)}")

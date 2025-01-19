@@ -4,3 +4,4 @@ asyncio>=3.4.3
 cryptg>=0.2.post4
 pillow>=9.0.0
 nest_asyncio
+aiohttp>=3.8.1

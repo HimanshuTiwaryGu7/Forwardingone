@@ -10,16 +10,34 @@ import nest_asyncio
 from telethon.sync import TelegramClient as SyncTelegramClient
 import os
 from aiohttp import web
+import re
 
 # Apply nest_asyncio
 nest_asyncio.apply()
 
+# Add session cleanup function
+def cleanup_sessions():
+    session_files = ['bot.session', 'session_name.session']
+    for file in session_files:
+        try:
+            if os.path.exists(file):
+                os.remove(file)
+                print(f"Removed existing session file: {file}")
+        except Exception as e:
+            print(f"Error removing session file {file}: {str(e)}")
+
 # Configuration
-API_ID = '5625170'
-API_HASH = '77633c2757f8697650e0c31cf505ffbc'
-BOT_TOKEN = '8065341112:AAH9n47ZLL2mJLwh5pQ4JeeEbmKc74uVBKE'
-SOURCE_CHANNEL = '@Dhol_Ullu_Originals'
-DESTINATION_CHANNEL = '@abchbcshv'
+API_ID = '22874714'
+API_HASH = '0f5a6aca792a87d6056a70ebe90537ae'
+BOT_TOKEN = '8117902471:AAFuRuJ_6V6Qdj62FPMhsLOEJFWfganWJ9s'
+# Change single channel to list of channels
+SOURCE_CHANNELS = [
+    '@MeghUpdates',
+    '@NeonManYT',
+     '@geo_gaganauts' # Add your additional channels here
+    
+]
+DESTINATION_CHANNEL = '@todaynewsuptodate'
 
 class UserSession:
     def __init__(self):
@@ -29,43 +47,77 @@ class UserSession:
         self.attempts = 0
 
 class MessageForwarder:
-    def __init__(self, client, source_channel, destination_channel):
+    def __init__(self, client, source_channels, destination_channel):
         self.client = client
-        self.source_channel = source_channel
+        self.source_channels = source_channels
         self.destination_channel = destination_channel
-        self.last_message_id = None
+        self.last_message_ids = {channel: None for channel in source_channels}
         self.is_running = False
+        self.url_pattern = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
+
+    def remove_links(self, text):
+        """Remove all URLs from text"""
+        if text:
+            return self.url_pattern.sub('', text).strip()
+        return text
+
+    async def forward_message(self, message):
+        """Forward message with links removed"""
+        try:
+            # Handle text messages
+            if message.text:
+                cleaned_text = self.remove_links(message.text)
+                await self.client.send_message(
+                    self.destination_channel,
+                    cleaned_text,
+                    file=message.media if message.media else None
+                )
+            # Handle media messages with captions
+            elif message.media:
+                cleaned_caption = self.remove_links(message.caption)
+                await self.client.send_file(
+                    self.destination_channel,
+                    file=message.media,
+                    caption=cleaned_caption
+                )
+            # Handle other types of messages
+            else:
+                await self.client.send_message(self.destination_channel, message)
+            
+            print(f"Forwarded message ID: {message.id} (links removed if present)")
+            
+        except Exception as e:
+            print(f"Error forwarding message {message.id}: {str(e)}")
 
     async def start_forwarding(self):
         self.is_running = True
         try:
-            # Get last message ID from source channel
-            messages = await self.client.get_messages(self.source_channel, limit=1)
-            if messages:
-                self.last_message_id = messages[0].id
-            
-            print(f"Starting forwarding from {self.source_channel} to {self.destination_channel}")
-            print(f"Last message ID: {self.last_message_id}")
+            # Get last message ID from each source channel
+            for channel in self.source_channels:
+                messages = await self.client.get_messages(channel, limit=1)
+                if messages:
+                    self.last_message_ids[channel] = messages[0].id
+                print(f"Starting forwarding from {channel} to {self.destination_channel}")
+                print(f"Last message ID for {channel}: {self.last_message_ids[channel]}")
 
             while self.is_running:
-                try:
-                    # Get new messages since last checked message
-                    messages = await self.client.get_messages(
-                        self.source_channel, 
-                        min_id=self.last_message_id
-                    )
+                for source_channel in self.source_channels:
+                    try:
+                        # Get new messages since last checked message for this channel
+                        messages = await self.client.get_messages(
+                            source_channel, 
+                            min_id=self.last_message_ids[source_channel]
+                        )
 
-                    for message in reversed(messages):
-                        try:
-                            # Forward the message
-                            await self.client.send_message(self.destination_channel, message)
-                            print(f"Forwarded message ID: {message.id}")
-                            self.last_message_id = max(self.last_message_id or 0, message.id)
-                        except Exception as e:
-                            print(f"Error forwarding message {message.id}: {str(e)}")
+                        for message in reversed(messages):
+                            await self.forward_message(message)
+                            self.last_message_ids[source_channel] = max(
+                                self.last_message_ids[source_channel] or 0, 
+                                message.id
+                            )
 
-                except Exception as e:
-                    print(f"Error getting messages: {str(e)}")
+                    except Exception as e:
+                        print(f"Error getting messages from {source_channel}: {str(e)}")
 
                 await asyncio.sleep(5)  # Check every 5 seconds
 
@@ -75,9 +127,9 @@ class MessageForwarder:
     def stop_forwarding(self):
         self.is_running = False
 
-# Initialize clients
-bot = TelegramClient('bot', API_ID, API_HASH)
-client = TelegramClient('session_name', API_ID, API_HASH)
+# Initialize clients with unique session names
+bot = TelegramClient('bot_session', API_ID, API_HASH)
+client = TelegramClient('user_session', API_ID, API_HASH)
 auth_users = {}
 forwarder = None
 
@@ -192,26 +244,27 @@ def register_handlers():
 async def start_forwarding():
     global forwarder
     try:
-        # Create new forwarder instance
-        forwarder = MessageForwarder(client, SOURCE_CHANNEL, DESTINATION_CHANNEL)
+        # Create new forwarder instance with multiple source channels
+        forwarder = MessageForwarder(client, SOURCE_CHANNELS, DESTINATION_CHANNEL)
         
         # Start forwarding in background
         asyncio.create_task(forwarder.start_forwarding())
         
         print(f"Bot is running!")
-        print(f"Monitoring {SOURCE_CHANNEL}")
+        print(f"Monitoring channels: {', '.join(SOURCE_CHANNELS)}")
         print(f"Forwarding to {DESTINATION_CHANNEL}")
     except Exception as e:
         print(f"Error starting forwarder: {str(e)}")
 
-# Add this new function for the web server
+# Add web server function
 async def web_server():
     app = web.Application()
     
-    async def handle(request):
-        return web.Response(text="Bot is running!")
+    async def health_check(request):
+        return web.Response(text="OK", status=200)
     
-    app.router.add_get('/', handle)
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
     
     runner = web.AppRunner(app)
     await runner.setup()
@@ -219,11 +272,15 @@ async def web_server():
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
     print(f"Web server started on port {port}")
+    return runner
 
 async def main():
     try:
-        # Start web server
-        await web_server()
+        # Start web server first
+        runner = await web_server()
+        
+        # Clean up existing sessions before starting
+        cleanup_sessions()
         
         await bot.start(bot_token=BOT_TOKEN)
         await client.connect()
@@ -237,7 +294,7 @@ async def main():
             print("Waiting for authentication through bot...")
             print("Please start the bot and complete authentication.")
         
-        # Run the bot forever
+        # Run both web server and bot
         await bot.run_until_disconnected()
     except Exception as e:
         print(f"Main loop error: {str(e)}")
@@ -246,6 +303,7 @@ async def main():
             forwarder.stop_forwarding()
         await client.disconnect()
         await bot.disconnect()
+        await runner.cleanup()
 
 if __name__ == '__main__':
     try:
